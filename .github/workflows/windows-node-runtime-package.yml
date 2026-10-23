@@ -1,0 +1,77 @@
+name: Windows 安装候选包
+run-name: Windows 安装候选包 a296b1ee
+
+on:
+  push:
+    branches: [proof/windows-node-runtime]
+    paths: [.github/workflows/windows-node-runtime-package.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: github.repository == 'Links2008/openclaw' && github.ref == 'refs/heads/proof/windows-node-runtime'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      SOURCE_SHA: a296b1ee845674819a25c77df67a218c12323de6
+      OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192"
+    steps:
+      - name: 检出固定候选提交
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a296b1ee845674819a25c77df67a218c12323de6
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 核对候选身份与完整源码
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -d extensions
+          test -d ui
+
+      - name: 使用候选提交的官方工具链与冻结依赖安装
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "true"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: off
+
+      - name: 构建官方安装验证产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.22.1"
+          test "$(pnpm --version)" = "12.15.0"
+          pnpm build:ci-artifacts
+
+      - name: 官方打包与完整性检查并记录来源
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/windows-node-runtime-package"
+          node scripts/package-openclaw-for-docker.mjs --skip-build \
+            --allow-unreleased-changelog --output-dir "$package_dir" \
+            --output-name openclaw-candidate.tgz
+          git rev-parse HEAD > "$package_dir/SOURCE_SHA.txt"
+          tar -xOf "$package_dir/openclaw-candidate.tgz" package/dist/build-info.json > "$package_dir/build-info.json"
+          node --input-type=module -e 'import assert from "node:assert/strict"; import fs from "node:fs"; assert.equal(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).commit, process.env.SOURCE_SHA);' "$package_dir/build-info.json"
+          cd "$package_dir"
+          sha256sum openclaw-candidate.tgz > SHA256SUMS
+          printf 'directory=%s\n' "$package_dir" >> "$GITHUB_OUTPUT"
+
+      - name: 上传候选包及校验信息
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-node-runtime-a296b1ee
+          path: ${{ steps.package.outputs.directory }}/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
