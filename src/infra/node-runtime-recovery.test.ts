@@ -203,6 +203,32 @@ async function expectRecoveryStarted(options: Parameters<typeof recoverNodeRunti
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([
+    { platform: "win32", quote: '"', relative: false, selected: true },
+    { platform: "win32", quote: "'", relative: false, selected: true },
+    { platform: "win32", quote: '"', relative: true, selected: false },
+    { platform: "linux", quote: '"', relative: false, selected: false },
+  ] as const)(
+    "handles $quote-quoted PATH directories on $platform (relative=$relative)",
+    async ({ platform, quote, relative, selected }) => {
+      mockProcessPlatform(platform);
+      const candidate = await writeFixture(
+        path.join("Node Runtime", platform === "win32" ? "node.exe" : "node"),
+      );
+      mocks.admissible.add(candidate);
+
+      const runtime = await findUsableNodeRuntime({
+        homeDir: home,
+        env: {
+          HOME: home,
+          PATH: `${quote}${relative ? "Node Runtime" : path.dirname(candidate)}${quote}`,
+        },
+      });
+
+      expect(runtime).toEqual(selected ? { nodePath: candidate, reason: "PATH" } : null);
+    },
+  );
+
   it.each(["HOME", "OPENCLAW_HOME"])(
     "reuses a private runtime when cwd equals %s",
     async (homeVariable) => {

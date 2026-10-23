@@ -589,7 +589,8 @@ function* availableNodeCandidates(homeDir, env) {
       ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH"
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
-  for (const directory of (env[pathKey] || "").split(path.delimiter)) {
+  for (const entry of (env[pathKey] || "").split(path.delimiter)) {
+    const directory = process.platform === "win32" ? entry.replace(/^(['"])(.*)\1$/, "$2") : entry;
     if (path.isAbsolute(directory)) {
       yield [path.join(directory, binary), "PATH"];
     }
