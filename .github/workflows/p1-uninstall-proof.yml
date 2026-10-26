@@ -30,14 +30,16 @@ jobs:
       CI: "true"
       OPENCLAW_VITEST_RUNTIME: node
       PROOF_EXPECTED_SHA: ${{ inputs.source_sha }}
-      PROOF_OUTPUT_DIR: ${{ runner.temp }}/p1-uninstall-proof
-      PROOF_HARNESS_DIR: ${{ runner.temp }}/p1-uninstall-harness
     steps:
       - name: 校验固定源码输入
         shell: bash
         run: |
           set -euo pipefail
           [[ "$PROOF_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          PROOF_OUTPUT_DIR="$RUNNER_TEMP/p1-uninstall-proof"
+          PROOF_HARNESS_DIR="$RUNNER_TEMP/p1-uninstall-harness"
+          echo "PROOF_OUTPUT_DIR=$PROOF_OUTPUT_DIR" >> "$GITHUB_ENV"
+          echo "PROOF_HARNESS_DIR=$PROOF_HARNESS_DIR" >> "$GITHUB_ENV"
           mkdir -p "$PROOF_OUTPUT_DIR"
           printf '%s\n' "$PROOF_EXPECTED_SHA" > "$PROOF_OUTPUT_DIR/source-sha.txt"
 
