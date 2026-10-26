@@ -23,6 +23,7 @@ on:
           - live-fixed
           - format
           - policy-red
+          - cost
 
 permissions:
   contents: read
@@ -142,6 +143,17 @@ jobs:
           set -e
           test "$test_status" -eq 1
           node -e 'const r=require(process.argv[1]); if(r.numFailedTests!==2 || r.numPassedTests!==0) process.exit(1)' "$PROOF_OUTPUT_DIR/policy-red.json"
+
+      - name: 测量改动测试文件耗时
+        if: inputs.mode == 'cost'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in management-service.uninstall-ownership.test.ts config-policy.test.ts; do
+            started=$SECONDS
+            pnpm test "src/plugins/$file" --maxWorkers=1 --reporter=json --outputFile="$PROOF_OUTPUT_DIR/$file.json" 2>&1 | tee "$PROOF_OUTPUT_DIR/$file.log"
+            echo "$file wrapper_seconds=$((SECONDS-started))" >> "$PROOF_OUTPUT_DIR/test-cost.txt"
+          done
 
       - name: 校验生产类型
         if: inputs.mode == 'green'
