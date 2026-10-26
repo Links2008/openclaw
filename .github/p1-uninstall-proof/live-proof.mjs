@@ -135,7 +135,7 @@ try {
   report.source = { sha, buildInfo, harnessNode: process.version };
   await writeFile(configPath, JSON.stringify({
     gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false } },
-    agents: { defaults: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+    agents: { defaults: { workspace: path.join(root, "workspace") } },
     cron: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
