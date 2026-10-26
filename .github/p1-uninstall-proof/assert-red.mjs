@@ -22,10 +22,9 @@ for (const alias of ["channels", "providers", "legacyPluginIds"]) {
   assert.ok(test, `缺少 ${alias} 碰撞用例`);
   assert.equal(test.status, "failed");
   const failure = test.failureMessages.join("\n");
-  assert.match(failure, /expected.+(?:spy|toHaveBeenNthCalledWith)/isu);
-  for (const evidence of ["sourceConfig", "scope-live", "scope-orphan", "enabled"]) {
-    assert.ok(failure.includes(evidence), `必须在首笔禁用配置断言失败：${evidence}`);
-  }
+  assert.match(failure, /expected 1st "vi\.fn\(\)" call to have been called with/u);
+  // 当前固定补丁的 410 行正是首笔禁用配置断言；Vitest JSON 不包含完整 diff。
+  assert.match(failure, /management-service\.uninstall-ownership\.test\.ts:410:35/u);
 }
 const control = selected.find(
   ({ title }) => title === "keeps uninstall scope for a channels alias (exact record: false)",
