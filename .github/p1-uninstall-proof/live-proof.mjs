@@ -9,8 +9,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 // 仅在无用户凭据的 Linux Actions runner 上运行真实 CLI/Gateway。
 assert.equal(process.platform, "linux", "此脚本禁止在用户 Windows 主机执行");
 assert.equal(process.env.GITHUB_ACTIONS, "true", "需要专用 GitHub Actions runner");
-const mode = process.argv[2];
-assert.ok(mode === "baseline" || mode === "fixed", "参数必须为 baseline 或 fixed");
+const scenario = process.argv[2];
+assert.ok(["baseline", "fixed", "allow-only", "offline"].includes(scenario));
+const mode = scenario === "baseline" ? "baseline" : "fixed";
+const allowOnly = scenario === "allow-only";
+const offline = scenario === "offline";
 const cwd = process.cwd();
 const runnerTemp = path.resolve(process.env.RUNNER_TEMP ?? "");
 assert.ok(process.env.RUNNER_TEMP && path.isAbsolute(process.env.RUNNER_TEMP));
@@ -26,7 +29,7 @@ const nonce = randomBytes(12).toString("hex");
 const orphanId = "scope-orphan";
 const liveId = "scope-live";
 const probeMethod = "scopeLive.probe";
-const report = { mode, root, stage: "prepare", success: false, commands: [] };
+const report = { mode, scenario, root, stage: "prepare", success: false, commands: [] };
 const redact = (text) => String(text).replaceAll(token, "<synthetic-token>");
 const save = () => writeFile(path.join(outputDir, "result.json"), `${JSON.stringify(report, null, 2)}\n`);
 const env = {
@@ -150,6 +153,7 @@ try {
     await command("remove-orphan-policy", ["config", "unset", `plugins.entries.${orphanId}`]);
   }
   await command("allow-live-only", ["config", "set", "plugins.allow", JSON.stringify([liveId]), "--strict-json"]);
+  if (allowOnly) await command("remove-live-entry", ["config", "unset", `plugins.entries.${liveId}`]);
   const installed = await readRegistry("registry-installed", true);
   assert.ok(installed.installRecords[orphanId]?.installPath, "必须先经真实安装生成 A durable record");
   assert.ok(installed.installRecords[liveId], "B 安装记录不存在");
@@ -168,10 +172,12 @@ try {
   assert.ok(live, "B 必须仍被发现");
   assert.ok(live.contributions?.channels.includes(orphanId), "B 必须声明与 A record 相同的 channel alias");
   const configBefore = await readConfig();
-  assert.ok(!Object.hasOwn(configBefore.plugins.entries, orphanId), "匹配报告者的无 A policy entry 前态");
-  assert.equal(configBefore.plugins.entries[liveId].enabled, true);
+  assert.ok(!Object.hasOwn(configBefore.plugins.entries ?? {}, orphanId), "匹配报告者的无 A policy entry 前态");
+  if (allowOnly) assert.ok(!Object.hasOwn(configBefore.plugins.entries ?? {}, liveId));
+  else assert.equal(configBefore.plugins.entries[liveId].enabled, true);
   report.precondition = { orphanRecord: before.installRecords[orphanId], liveRecord: before.installRecords[liveId], livePlugin: live };
 
+  const startGateway = async () => {
   report.stage = "gateway-start";
   gateway = spawn("pnpm", ["--silent", "openclaw", "gateway", "run"], {
     cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"],
@@ -191,18 +197,23 @@ try {
     await sleep(1_000);
   }
   assert.ok(ready, `Gateway 未就绪: ${redact(gatewayStderr)}`);
+  };
   const probe = (label) => jsonCommand(label, ["gateway", "call", probeMethod, "--timeout", "30000"]);
   const expectedProbe = { pluginId: liveId, nonce, node: process.version };
-  assert.deepEqual(await probe("probe-before"), expectedProbe);
+  if (!offline) {
+    await startGateway();
+    assert.deepEqual(await probe("probe-before"), expectedProbe);
+  }
   report.stage = "uninstall";
   const beforeDryRun = await readConfig();
-  assert.deepEqual(beforeDryRun.plugins.entries[liveId], configBefore.plugins.entries[liveId]);
+  assert.deepEqual(beforeDryRun.plugins, configBefore.plugins);
   const dryRun = await command("uninstall-dry-run", ["plugins", "uninstall", orphanId, "--dry-run", "--keep-files"]);
   assert.match(dryRun.stdout, /Plugin: scope-orphan(?:\r?\n|$)/);
   assert.match(dryRun.stdout, /Dry run, no changes made\./);
   assert.deepEqual(await readConfig(), beforeDryRun, "dry-run 不应写配置");
   const actual = await command("uninstall-actual", ["plugins", "uninstall", orphanId, "--force", "--keep-files"], { allowFailure: mode === "baseline", timeoutMs: 660_000 });
-  assert.doesNotMatch(actual.stdout, /Saved for the next Gateway start\./, "不能以离线卸载代替 Gateway 路径");
+  if (offline) assert.match(actual.stdout, /Saved for the next Gateway start\./);
+  else assert.doesNotMatch(actual.stdout, /Saved for the next Gateway start\./, "不能以离线卸载代替 Gateway 路径");
   const configAfter = await readConfig();
   report.postcondition = { uninstallExitCode: actual.code, plugins: configAfter.plugins };
   if (mode === "baseline") {
@@ -222,11 +233,11 @@ try {
     report.postcondition.probeExitCode = unavailable.code;
   } else {
     assert.match(actual.stdout, /Uninstalled plugin "scope-orphan"\./);
-    assert.deepEqual(configAfter.plugins.entries[liveId], configBefore.plugins.entries[liveId]);
-    assert.equal(configAfter.plugins.entries[orphanId].enabled, false);
+    assert.deepEqual(configAfter.plugins, configBefore.plugins);
     const after = await readRegistry("registry-after");
     assert.ok(!Object.hasOwn(after.installRecords, orphanId), "修复后应删除 A record");
     assert.deepEqual(after.installRecords[liveId], before.installRecords[liveId], "B record 不应改变");
+    if (offline) await startGateway();
     assert.deepEqual(await probe("probe-after"), expectedProbe);
     const reload = await jsonCommand("reload-live", ["plugins", "reload", liveId]);
     assert.ok(Number.isFinite(reload.runtime?.generation), "reload 必须返回运行时 generation");
