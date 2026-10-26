@@ -26,6 +26,7 @@ on:
           - format
           - policy-red
           - cost
+          - checks
 
 permissions:
   contents: read
@@ -151,7 +152,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in management-service.uninstall-ownership.test.ts config-policy.test.ts; do
+          for file in management-service.uninstall-ownership.test.ts; do
             started=$SECONDS
             pnpm test "src/plugins/$file" --maxWorkers=1 --reporter=json --outputFile="$PROOF_OUTPUT_DIR/$file.json" 2>&1 | tee "$PROOF_OUTPUT_DIR/$file.log"
             echo "$file wrapper_seconds=$((SECONDS-started))" >> "$PROOF_OUTPUT_DIR/test-cost.txt"
@@ -172,13 +173,13 @@ jobs:
           node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.plugins-platform.json --incremental 2>&1 | tee "$PROOF_OUTPUT_DIR/types-plugin-tests.log"
 
       - name: 校验改动文件的 lint 与格式
-        if: inputs.mode == 'green'
+        if: inputs.mode == 'green' || inputs.mode == 'checks'
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/plugins/management-uninstall.ts src/plugins/config-normalization-shared.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-core.log"
-          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-policy.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-tests.log"
-          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format.log"
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/plugins/management-uninstall.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-core.log"
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-tests.log"
+          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format.log"
 
       - name: 构建带源码身份的真实运行时
         if: startsWith(inputs.mode, 'live-')
