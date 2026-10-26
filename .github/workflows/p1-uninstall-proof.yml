@@ -8,6 +8,10 @@ on:
         description: 精确源码提交（40 位十六进制 SHA）
         required: true
         type: string
+      candidate_patch:
+        description: 可选的 Base64 补丁，供提交前隔离验证
+        required: false
+        type: string
       mode:
         description: 验证阶段
         required: true
@@ -71,6 +75,21 @@ jobs:
           git diff --exit-code
           node --check "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/assert-red.mjs"
           node --check "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/live-proof.mjs"
+
+      - name: 应用并记录提交前候选补丁
+        if: inputs.candidate_patch != ''
+        shell: bash
+        env:
+          CANDIDATE_PATCH: ${{ inputs.candidate_patch }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$CANDIDATE_PATCH" | base64 --decode > "$PROOF_OUTPUT_DIR/candidate.patch"
+          git apply --check "$PROOF_OUTPUT_DIR/candidate.patch"
+          git apply "$PROOF_OUTPUT_DIR/candidate.patch"
+          git diff --check
+          sha256sum "$PROOF_OUTPUT_DIR/candidate.patch" > "$PROOF_OUTPUT_DIR/candidate.sha256"
+          git diff --raw > "$PROOF_OUTPUT_DIR/candidate-files.txt"
+          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts > "$PROOF_OUTPUT_DIR/candidate-blobs.txt"
 
       - name: 安装仓库固定工具链与依赖
         uses: ./.github/actions/setup-node-env
