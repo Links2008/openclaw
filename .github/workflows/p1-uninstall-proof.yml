@@ -22,6 +22,7 @@ on:
           - live-baseline
           - live-fixed
           - format
+          - policy-red
 
 permissions:
   contents: read
@@ -91,9 +92,9 @@ jobs:
           git diff --check
           sha256sum "$PROOF_OUTPUT_DIR/candidate.patch" > "$PROOF_OUTPUT_DIR/candidate.sha256"
           git diff --raw > "$PROOF_OUTPUT_DIR/candidate-files.txt"
-          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts > "$PROOF_OUTPUT_DIR/candidate-blobs.txt"
+          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts > "$PROOF_OUTPUT_DIR/candidate-blobs.txt"
           if [[ "$PATCH_MODE" == live-fixed ]]; then
-            git add -- src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts
+            git add -- src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts
             tree=$(git write-tree)
             carrier=$(git -c user.name='Validation snapshot' -c user.email='validation@example.com' commit-tree "$tree" -p "$PROOF_EXPECTED_SHA" -m 'Temporary isolated proof snapshot; never pushed')
             git update-ref HEAD "$carrier" "$PROOF_EXPECTED_SHA"
@@ -128,7 +129,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm test src/cli/plugins-uninstall-selection.test.ts src/cli/plugins-cli.uninstall.test.ts src/plugins/management-service.uninstall-ownership.test.ts src/gateway/server-methods/plugins-mutations.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT_DIR/green.log"
+          pnpm test src/cli/plugins-uninstall-selection.test.ts src/cli/plugins-cli.uninstall.test.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-policy.test.ts src/plugins/config-state.test.ts src/gateway/server-methods/plugins-mutations.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT_DIR/green.log"
+
+      - name: 检查配置别名覆盖的失败基线
+        if: inputs.mode == 'policy-red'
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          pnpm test src/plugins/config-policy.test.ts --maxWorkers=1 --testNamePattern 'prefers canonical entry policy' --reporter=json --outputFile="$PROOF_OUTPUT_DIR/policy-red.json" 2>&1 | tee "$PROOF_OUTPUT_DIR/policy-red.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          test "$test_status" -eq 1
+          node -e 'const r=require(process.argv[1]); if(r.numFailedTests!==2 || r.numPassedTests!==0) process.exit(1)' "$PROOF_OUTPUT_DIR/policy-red.json"
 
       - name: 校验生产类型
         if: inputs.mode == 'green'
@@ -149,9 +162,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/plugins/management-uninstall.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-core.log"
-          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-tests.log"
-          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format.log"
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/plugins/management-uninstall.ts src/plugins/config-normalization-shared.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-core.log"
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-policy.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-tests.log"
+          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format.log"
 
       - name: 构建带源码身份的真实运行时
         if: startsWith(inputs.mode, 'live-')
@@ -174,11 +187,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm format src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts
-          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format-verified.log"
-          cp src/plugins/management-uninstall.ts "$PROOF_OUTPUT_DIR/management-uninstall.ts"
+          pnpm format src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts
+          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format-verified.log"
+          cp src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts "$PROOF_OUTPUT_DIR/"
           git diff > "$PROOF_OUTPUT_DIR/formatted.patch"
-          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts > "$PROOF_OUTPUT_DIR/formatted-blobs.txt"
+          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts src/plugins/config-normalization-shared.ts src/plugins/config-policy.test.ts > "$PROOF_OUTPUT_DIR/formatted-blobs.txt"
 
       - name: 保存本次隔离验证结果
         if: always()
