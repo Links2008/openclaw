@@ -82,6 +82,7 @@ jobs:
         shell: bash
         env:
           CANDIDATE_PATCH: ${{ inputs.candidate_patch }}
+          PATCH_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           printf '%s' "$CANDIDATE_PATCH" | base64 --decode > "$PROOF_OUTPUT_DIR/candidate.patch"
@@ -91,6 +92,15 @@ jobs:
           sha256sum "$PROOF_OUTPUT_DIR/candidate.patch" > "$PROOF_OUTPUT_DIR/candidate.sha256"
           git diff --raw > "$PROOF_OUTPUT_DIR/candidate-files.txt"
           git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts > "$PROOF_OUTPUT_DIR/candidate-blobs.txt"
+          if [[ "$PATCH_MODE" == live-fixed ]]; then
+            git add -- src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts
+            tree=$(git write-tree)
+            carrier=$(git -c user.name='Validation snapshot' -c user.email='validation@example.com' commit-tree "$tree" -p "$PROOF_EXPECTED_SHA" -m 'Temporary isolated proof snapshot; never pushed')
+            git update-ref HEAD "$carrier" "$PROOF_EXPECTED_SHA"
+            git diff HEAD --exit-code
+            printf '%s\n' "$carrier" > "$PROOF_OUTPUT_DIR/validation-carrier-sha.txt"
+            echo "PROOF_EXPECTED_SHA=$carrier" >> "$GITHUB_ENV"
+          fi
 
       - name: 安装仓库固定工具链与依赖
         uses: ./.github/actions/setup-node-env
