@@ -21,6 +21,7 @@ on:
           - green
           - live-baseline
           - live-fixed
+          - format
 
 permissions:
   contents: read
@@ -157,6 +158,17 @@ jobs:
         run: |
           set -euo pipefail
           node "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/live-proof.mjs" "${PROOF_MODE#live-}" 2>&1 | tee "$PROOF_OUTPUT_DIR/live.log"
+
+      - name: 生成并校验规范格式
+        if: inputs.mode == 'format'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm format src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts
+          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format-verified.log"
+          cp src/plugins/management-uninstall.ts "$PROOF_OUTPUT_DIR/management-uninstall.ts"
+          git diff > "$PROOF_OUTPUT_DIR/formatted.patch"
+          git hash-object src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts > "$PROOF_OUTPUT_DIR/formatted-blobs.txt"
 
       - name: 保存本次隔离验证结果
         if: always()
