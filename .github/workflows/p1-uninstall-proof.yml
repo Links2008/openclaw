@@ -1,0 +1,147 @@
+name: P1 插件卸载隔离验证
+run-name: P1 uninstall ${{ inputs.mode }} @ ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 精确源码提交（40 位十六进制 SHA）
+        required: true
+        type: string
+      mode:
+        description: 验证阶段
+        required: true
+        type: choice
+        options:
+          - red
+          - green
+          - live-baseline
+          - live-fixed
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    if: github.repository == 'Links2008/openclaw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: "true"
+      OPENCLAW_VITEST_RUNTIME: node
+      PROOF_EXPECTED_SHA: ${{ inputs.source_sha }}
+      PROOF_OUTPUT_DIR: ${{ runner.temp }}/p1-uninstall-proof
+      PROOF_HARNESS_DIR: ${{ runner.temp }}/p1-uninstall-harness
+    steps:
+      - name: 校验固定源码输入
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PROOF_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          mkdir -p "$PROOF_OUTPUT_DIR"
+          printf '%s\n' "$PROOF_EXPECTED_SHA" > "$PROOF_OUTPUT_DIR/source-sha.txt"
+
+      - name: 检出精确产品源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Links2008/openclaw
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: 检出本次工作流对应的独立验证脚本
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Links2008/openclaw
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: .github/p1-uninstall-proof
+          path: _proof
+
+      - name: 将验证脚本移出产品源码树
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PROOF_EXPECTED_SHA"
+          test ! -e "$PROOF_HARNESS_DIR"
+          mv _proof "$PROOF_HARNESS_DIR"
+          git diff --exit-code
+          node --check "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/assert-red.mjs"
+          node --check "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/live-proof.mjs"
+
+      - name: 安装仓库固定工具链与依赖
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "true"
+          install-deps: "true"
+          frozen-lockfile: "true"
+          cache-mode: "off"
+          semantic-checks: "true"
+
+      - name: 确认基线在目标断言失败
+        if: inputs.mode == 'red'
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          pnpm test src/plugins/management-service.uninstall-ownership.test.ts --maxWorkers=1 --testNamePattern 'keeps uninstall scope for' --reporter=json --outputFile="$PROOF_OUTPUT_DIR/red.json" 2>&1 | tee "$PROOF_OUTPUT_DIR/red.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          node "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/assert-red.mjs" "$PROOF_OUTPUT_DIR/red.json" "$test_status"
+
+      - name: 验证修复及 CLI、Gateway 调用方
+        if: inputs.mode == 'green'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm test src/cli/plugins-uninstall-selection.test.ts src/cli/plugins-cli.uninstall.test.ts src/plugins/management-service.uninstall-ownership.test.ts src/gateway/server-methods/plugins-mutations.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT_DIR/green.log"
+
+      - name: 校验生产类型
+        if: inputs.mode == 'green'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm tsgo:core 2>&1 | tee "$PROOF_OUTPUT_DIR/types-core.log"
+
+      - name: 校验插件测试类型
+        if: inputs.mode == 'green'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.plugins-platform.json --incremental 2>&1 | tee "$PROOF_OUTPUT_DIR/types-plugin-tests.log"
+
+      - name: 校验改动文件的 lint 与格式
+        if: inputs.mode == 'green'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.core.json src/plugins/management-uninstall.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-core.log"
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/lint-tests.log"
+          pnpm format:check src/plugins/management-uninstall.ts src/plugins/management-service.uninstall-ownership.test.ts 2>&1 | tee "$PROOF_OUTPUT_DIR/format.log"
+
+      - name: 构建带源码身份的真实运行时
+        if: startsWith(inputs.mode, 'live-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build sourcePerformance 2>&1 | tee "$PROOF_OUTPUT_DIR/build.log"
+
+      - name: 验证真实 CLI 到 Gateway 的卸载流程
+        if: startsWith(inputs.mode, 'live-')
+        shell: bash
+        env:
+          PROOF_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          node "$PROOF_HARNESS_DIR/.github/p1-uninstall-proof/live-proof.mjs" "${PROOF_MODE#live-}" 2>&1 | tee "$PROOF_OUTPUT_DIR/live.log"
+
+      - name: 保存本次隔离验证结果
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: p1-uninstall-${{ inputs.mode }}-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/p1-uninstall-proof
+          if-no-files-found: warn
+          retention-days: 7
